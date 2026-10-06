@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PE & BS Dashboard Assistant</title>
+<title>Dashboard Assistant</title>
 <style>
   :root {
     --blue: #3662a8;
@@ -96,6 +96,49 @@
   }
   .typing { color: #7a8494; font-style: italic; }
 
+  /* Result tables (built from data.metadata.table) */
+  .msg.has-table { max-width: 100%; width: 100%; }
+  .table-wrap {
+    margin-top: 10px;
+    max-height: 420px;
+    overflow: auto;
+    white-space: normal;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+  }
+  .data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+  }
+  .data-table th, .data-table td {
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--line);
+    text-align: left;
+    white-space: nowrap;
+  }
+  .data-table th {
+    position: sticky;
+    top: 0;
+    background: var(--blue);
+    color: #fff;
+    font-weight: 600;
+  }
+  .data-table .num { text-align: right; }
+  .data-table tbody tr:nth-child(even) { background: #f7f8fa; }
+  .data-table tbody tr:hover { background: #eef3fb; }
+  .table-note { margin-top: 6px; font-size: 12px; color: #7a8494; }
+
+  /* Pie charts (built from data.metadata.chart) */
+  .pie-box { display: flex; align-items: center; gap: 24px; margin-top: 12px; white-space: normal; flex-wrap: wrap; }
+  .pie { width: 180px; height: 180px; border-radius: 50%; flex-shrink: 0; }
+  .pie-legend { font-size: 13px; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  .pie-legend td { padding: 3px 8px; }
+  .pie-legend .num { text-align: right; }
+  .pie-legend .total td { border-top: 1px solid var(--line); font-weight: 600; }
+  .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; }
+
   form {
     display: flex;
     gap: 8px;
@@ -135,11 +178,11 @@
 
 <div class="app">
   <header>
-    <h1>PE & BS Dashboard Assistant</h1>
+    <h1>Dashboard Assistant</h1>
     <button id="clear" type="button">Clear chat</button>
   </header>
 
-  <div id="chat"><div class="empty">You Can Ask anything about the dashboard.</div></div>
+  <div id="chat"><div class="empty">Ask anything about the dashboard.</div></div>
 
   <form id="form">
     <textarea id="input" placeholder="Type a message…"></textarea>
@@ -168,6 +211,101 @@
     return div;
   }
 
+  // Show the model's **bold** markdown as bold text; everything else stays plain text (no HTML is parsed).
+  function renderAnswer(el, text) {
+    el.textContent = "";
+    text.split(/(\*\*[^*]+\*\*)/g).forEach((part) => {
+      if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
+        const b = document.createElement("strong");
+        b.textContent = part.slice(2, -2);
+        el.appendChild(b);
+      } else if (part) {
+        el.appendChild(document.createTextNode(part));
+      }
+    });
+  }
+
+  // table = { columns: [{label, type}], rows: [[cell, ...]], total_rows, shown_rows } from the backend
+  function renderTable(container, table) {
+    const wrap = document.createElement("div");
+    wrap.className = "table-wrap";
+    const el = document.createElement("table");
+    el.className = "data-table";
+
+    const headRow = el.createTHead().insertRow();
+    for (const col of table.columns) {
+      const th = document.createElement("th");
+      th.textContent = col.label;
+      if (col.type === "number") th.className = "num";
+      headRow.appendChild(th);
+    }
+
+    const body = el.createTBody();
+    for (const row of table.rows) {
+      const tr = body.insertRow();
+      row.forEach((cell, i) => {
+        const td = tr.insertCell();
+        td.textContent = cell;
+        if (table.columns[i]?.type === "number") td.className = "num";
+      });
+    }
+
+    wrap.appendChild(el);
+    container.classList.add("has-table");
+    container.appendChild(wrap);
+
+    if (table.total_rows > table.shown_rows) {
+      const note = document.createElement("div");
+      note.className = "table-note";
+      note.textContent = `Showing ${table.shown_rows} of ${table.total_rows} rows`;
+      container.appendChild(note);
+    }
+  }
+
+  // chart = { slices: [{label, value_text, percent}], total_text } from the backend.
+  // The pie is one circle painted with a CSS conic-gradient; the legend carries the numbers.
+  const PIE_COLORS = ["#3662a8", "#438a96", "#6ccc84", "#f2a541", "#e0605e", "#8e6cc7", "#4fb3d9", "#c9a227"];
+  function renderPie(container, chart) {
+    const box = document.createElement("div");
+    box.className = "pie-box";
+    const legend = document.createElement("table");
+    legend.className = "pie-legend";
+
+    const total = chart.slices.reduce((sum, s) => sum + s.percent, 0) || 1;
+    let start = 0;
+    const stops = chart.slices.map((s, i) => {
+      const color = s.label === "Other" ? "#b8bec8" : PIE_COLORS[i % PIE_COLORS.length];
+      const end = start + (s.percent / total) * 100;  // normalise so rounding never leaves a gap
+      const stop = `${color} ${start}% ${end}%`;
+      start = end;
+
+      const row = legend.insertRow();
+      const sw = document.createElement("span");
+      sw.className = "swatch";
+      sw.style.background = color;
+      row.insertCell().appendChild(sw);
+      row.insertCell().textContent = s.label;
+      const value = row.insertCell(); value.className = "num"; value.textContent = s.value_text;
+      const pct = row.insertCell(); pct.className = "num"; pct.textContent = s.percent + "%";
+      return stop;
+    });
+
+    const totalRow = legend.insertRow();
+    totalRow.className = "total";
+    totalRow.insertCell();
+    totalRow.insertCell().textContent = "Total";
+    const totalValue = totalRow.insertCell(); totalValue.className = "num"; totalValue.textContent = chart.total_text;
+    totalRow.insertCell();
+
+    const pie = document.createElement("div");
+    pie.className = "pie";
+    pie.style.background = `conic-gradient(${stops.join(", ")})`;
+
+    box.appendChild(pie);
+    box.appendChild(legend);
+    container.appendChild(box);
+  }
+
   async function sendMessage(text) {
     bubble("user", text);
     const payload = { message: text, history: history.slice(-MAX_HISTORY) };
@@ -187,7 +325,11 @@
       const data = await res.json();
       const answer = data.reply?.trim() || "(empty reply)";
       reply.className = "msg assistant";
-      reply.textContent = answer;
+      renderAnswer(reply, answer);
+      const chart = data.metadata?.chart;
+      const table = data.metadata?.table;
+      if (chart?.slices?.length) renderPie(reply, chart);
+      else if (table?.rows?.length) renderTable(reply, table);
       history.push({ role: "assistant", content: answer });
     } catch (err) {
       reply.className = "msg error";
@@ -217,7 +359,7 @@
 
   document.getElementById("clear").addEventListener("click", () => {
     history = [];
-    chat.innerHTML = '<div class="empty">You Can Ask anything about the dashboard.</div>';
+    chat.innerHTML = '<div class="empty">Ask anything about the dashboard.</div>';
     input.focus();
   });
 
